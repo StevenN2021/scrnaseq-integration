@@ -1,0 +1,151 @@
+---
+title: "PBMC_Integration"
+author: "Steven Nguyen"
+date: "2026-07-19"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r}
+# links 
+# healthy 10k pbmcs: https://www.10xgenomics.com/datasets/10-k-human-pbm-cs-5-v-2-0-chromium-x-2-standard-6-1-0
+
+# myelofibrosis 10k pbmcs fresh: https://www.10xgenomics.com/datasets/10k_3p_Human_diseased_PBMC_Myelofibrosis_Fresh
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(tidyverse)
+```
+
+```{r}
+# read h5 files 
+threep_diseased_counts <- Read10X_h5('/Users/stevennguyen/Projects/scrnaseq-analysis/sc_analysis_projs/sc_rnaseq_integration/data/10k_3p_Human_diseased_PBMC_Myelofibrosis_Fresh_count_filtered_feature_bc_matrix.h5')
+
+fivep_healthy_counts <- Read10X_h5('/Users/stevennguyen/Projects/scrnaseq-analysis/sc_analysis_projs/sc_rnaseq_integration/data/10k_PBMC_5pv2_nextgem_Chromium_X_10k_PBMC_5pv2_nextgem_Chromium_X_count_sample_feature_bc_matrix.h5')
+
+# create seurat obj 
+pbmc_myelofibrosis <- CreateSeuratObject(counts = threep_diseased_counts, project = "Myelofibrosis_fresh")
+pbmc_healthy <- CreateSeuratObject(counts = fivep_healthy_counts, project = "Healthy_5pv2") 
+```
+
+```{r}
+# merge datasets for analysis before integration 
+
+merged <- merge(pbmc_healthy, y = pbmc_myelofibrosis, add.cell.ids = c("Healthy","MyeloFibrosis"), project = "pbmc20k")
+merged
+```
+
+```{r}
+merged[["Condition"]] <- case_when(
+  merged@meta.data$orig.ident == "Healthy_5pv2" ~ "Healthy", 
+  merged@meta.data$orig.ident == "Myelofibrosis_fresh" ~ "Myelofibrosis"
+)
+
+merged[["Assay_type"]] <- case_when(
+  merged@meta.data$orig.ident == "Healthy_5pv2" ~ "5p", 
+  merged@meta.data$orig.ident == "Myelofibrosis_fresh" ~ "3p"
+)
+
+
+```
+
+```{r}
+head(merged@meta.data)
+```
+
+
+
+```{r}
+# QC 
+merged[["percent.mt"]] <- PercentageFeatureSet(merged, pattern = "^MT-")
+
+VlnPlot(merged, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+# view relationship between qc metrics for both objs
+plot1 <- FeatureScatter(subset(merged, subset = merged@meta.data$orig.ident == "Myelofibrosis_fresh"), feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+plot2 <- FeatureScatter(subset(merged, subset = merged@meta.data$orig.ident == "Myelofibrosis_fresh"), feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1+plot2
+```
+
+```{r}
+# filter low quality cells for each dataset 
+merged_filtered <- subset(merged, subset = (
+  orig.ident == "Healthy_5pv2" &
+    nFeature_RNA > 200 &
+    nFeature_RNA < 5000 &
+    percent.mt < 15) |
+    (orig.ident == "Myelofibrosis_fresh" &
+       nFeature_RNA > 1000 &
+       nFeature_RNA < 6500 &
+       percent.mt < 5))
+
+dim(merged)
+dim(merged_filtered)
+```
+
+```{r}
+VlnPlot(merged_filtered, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+# run analysis without integration
+merged_filtered <- NormalizeData(merged_filtered)
+merged_filtered <- FindVariableFeatures(merged_filtered)
+```
+
+
+```{r}
+merged_filtered <- ScaleData(merged_filtered)
+merged_filtered <- RunPCA(merged_filtered)
+```
+
+```{r}
+merged_filtered <- FindNeighbors(merged_filtered, dims = 1:20, reduction = "pca")
+merged_filtered <- FindClusters(merged_filtered, resolution = 0.8)
+```
+
+```{r}
+merged_filtered <- RunUMAP(merged_filtered, dims = 1:20, reduction = "pca", reduction.name = "umap.unintegrated")
+
+DimPlot(merged_filtered, reduction = "umap.unintegrated", group.by = c("orig.ident","seurat_clusters"))
+```
+
+```{r}
+# perform integration 
+merged_filtered <- IntegrateLayers(merged_filtered, method = CCAIntegration, orig.reduction = "pca", new.reduction = "integrated.cca", verbose = F)
+```
+
+```{r}
+# rejoin layers 
+merged_filtered[["RNA"]] <- JoinLayers(merged_filtered[["RNA"]])
+
+# recalculate clusters 
+merged_filtered <- FindNeighbors(merged_filtered, reduction = "integrated.cca", dims = 1:20)
+merged_filtered <- FindClusters(merged_filtered, resolution = 0.5)
+```
+
+```{r}
+# run umap and plot
+merged_filtered <- RunUMAP(merged_filtered, dims = 1:20, reduction = "integrated.cca")
+DimPlot(merged_filtered, reduction = "umap", group.by = c("orig.ident","seurat_clusters"))
+```
+
+```{r}
+# split by orig.ident
+DimPlot(merged_filtered, reduction = "umap", split.by = "orig.ident")
+```
+
+```{r}
+# save obj 
+saveRDS(merged_filtered, file = "/Users/stevennguyen/Projects/scrnaseq-analysis/sc_analysis_projs/sc_rnaseq_integration/integrated.rds")
+```
+

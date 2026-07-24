@@ -1,3 +1,4 @@
 data/ 
 integrated.rds
-*.Rmd
+*.html
+.DS_Store

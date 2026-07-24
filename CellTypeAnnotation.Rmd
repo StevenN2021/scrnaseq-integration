@@ -1,0 +1,95 @@
+---
+title: "PBMC Cell Type Annotation + Pseudobulk"
+author: "Steven Nguyen"
+date: "2026-07-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r}
+# load library 
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+# load in integrated seurat obj
+integrated <- readRDS(file = "/Users/stevennguyen/Projects/scrnaseq-analysis/sc_analysis_projs/sc_rnaseq_integration/integrated.rds")
+integrated
+```
+
+```{r}
+# view clusters again
+DimPlot(integrated, reduction = "umap")
+```
+
+```{r}
+# run umap again with lower resolution 
+integrated <- FindClusters(integrated, resolution = 0.375)
+integrated <- RunUMAP(integrated, dims = 1:20, reduction = "integrated.cca", reduction.name = "umap")
+```
+
+```{r}
+DimPlot(integrated, reduction = "umap")
+```
+
+```{r}
+integrated <- subset(integrated, idents = c(10,13), invert = TRUE)
+```
+
+
+```{r}
+# labeling 
+cluster_ids <- c(
+  "CD4 Naive T", # 0
+  "CD14 Mono", # 1
+  "CD4 Memory T", # 2
+  "B", # 3
+  "CD8 Naive T", # 4
+  "CD8 Memory T", # 5
+  "CD16 Mono", # 6
+  "NK", # 7
+  "Basophils", # 8
+  "Platelets", # 9
+  "pDC", # 10
+  "cDC", # 11
+  "HSCs" # 12
+  ) 
+```
+
+```{r}
+# find markers for each cluster
+integrated.markers <- FindAllMarkers(integrated, only.pos =  TRUE, logfc.threshold = 1, group.by = integrated@meta.data$seurat_clusters)
+```
+
+```{r}
+# filter out insignificant results 
+integrated.markers <- integrated.markers |>
+  group_by(cluster) |>
+    filter(avg_log2FC > 1, p_val_adj <= 0.05) |>
+      relocate(gene,cluster,p_val_adj)
+```
+
+
+```{r}
+# visualize cluster gene expression for labeling
+integrated.markers[integrated.markers$cluster == "15",]
+```
+
+
+```{r}
+# visualize cluster gene expression for labeling
+FeaturePlot(integrated, features = c("GNLY","PPBP"),reduction = "umap")
+```
+
+```{r}
+# assign labels to clusters
+names(cluster_ids) <- levels(integrated)
+integrated <- RenameIdents(integrated, cluster_ids)
+DimPlot(integrated, reduction = "umap")
+```
+
